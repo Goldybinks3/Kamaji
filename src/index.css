@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+html {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background: #ffffff;
+  color: #171717;
+}
+
+button,
+select,
+input {
+  font: inherit;
+}
+
+#root {
+  min-height: 100dvh;
+}
