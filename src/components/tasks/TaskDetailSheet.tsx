@@ -5,7 +5,7 @@ import { Sheet } from '../ui/Sheet.tsx'
 export function TaskDetailSheet({ assignmentId }: { assignmentId: string }) {
   const { assignmentById, closeSheet, releaseAssignment, today, currentUser } = useHousehold()
   const task = assignmentById(assignmentId)
-  if (!task) return null
+  if (!task || !currentUser) return null
 
   const mine = task.assigneeId === currentUser.id && task.status === 'accepted'
   const price = formatPrice(task.priceCents)
@@ -22,7 +22,7 @@ export function TaskDetailSheet({ assignmentId }: { assignmentId: string }) {
         <button
           type="button"
           className="mt-6 min-h-11 w-full rounded-full bg-neutral-200 font-bold"
-          onClick={() => releaseAssignment(task.id)}
+          onClick={() => void releaseAssignment(task.id).catch(() => {})}
         >
           Pas possible
         </button>

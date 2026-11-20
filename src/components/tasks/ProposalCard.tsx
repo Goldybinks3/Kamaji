@@ -20,7 +20,7 @@ export function ProposalCard({ task, today }: { task: Assignment; today: string 
       <button
         type="button"
         className="min-h-11 rounded-full bg-violet-700 px-4 font-bold text-white"
-        onClick={() => acceptAssignment(task.id)}
+        onClick={() => void acceptAssignment(task.id).catch(() => {})}
       >
         Oui
       </button>

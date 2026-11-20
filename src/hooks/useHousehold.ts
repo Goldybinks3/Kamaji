@@ -1,18 +1,63 @@
-import { createContext, createElement, useContext, useMemo, useState, type ReactNode } from 'react'
-import { currentUserId, createInitialState } from '../data/mock.ts'
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react'
+import { parisToday } from '../lib/dates.ts'
+import { isSupabaseConfigured, supabase } from '../lib/supabase.ts'
+import {
+  acceptAssignmentRpc,
+  completeAssignmentRpc,
+  createRequestRpc,
+  fetchAssignments,
+  releaseAssignmentRpc,
+} from '../services/assignments.ts'
+import {
+  createHousehold as createHouseholdApi,
+  getSessionUserId,
+  joinHousehold as joinHouseholdApi,
+  loadHouseholdState,
+  signOutDevice,
+  updateSelfEnergy,
+  updateSelfProfile,
+} from '../services/household.ts'
+import {
+  addShoppingItem as addShoppingItemApi,
+  deleteMeal as deleteMealApi,
+  fetchMeals,
+  fetchShopping,
+  removeShoppingItem as removeShoppingItemApi,
+  toggleShoppingItem,
+  upsertMeal as upsertMealApi,
+} from '../services/meals.ts'
 import type {
   Assignment,
+  AvatarKey,
   Energy,
+  Household,
   Meal,
+  MealDraft,
   Member,
   NewRequest,
+  ProfileUpdate,
   SheetState,
   ShoppingItem,
 } from '../types/domain.ts'
 
+export type AppStatus = 'unconfigured' | 'loading' | 'onboarding' | 'ready'
+
 type HouseholdValue = {
+  status: AppStatus
+  error: string | null
+  clearError: () => void
   today: string
-  currentUser: Member
+  household: Household | null
+  currentUser: Member | null
   members: Member[]
   others: Member[]
   myTasks: Assignment[]
@@ -26,12 +71,28 @@ type HouseholdValue = {
   openRequest: (assigneeId: string | null) => void
   openDetail: (assignmentId: string) => void
   closeSheet: () => void
-  completeAssignment: (id: string) => void
-  acceptAssignment: (id: string) => void
-  releaseAssignment: (id: string) => void
-  createRequest: (input: NewRequest) => void
-  setEnergy: (energy: Energy) => void
-  toggleShopping: (id: string) => void
+  createHousehold: (input: {
+    familyName: string
+    displayName: string
+    avatarKey: AvatarKey
+  }) => Promise<void>
+  joinHousehold: (input: {
+    code: string
+    displayName: string
+    avatarKey: AvatarKey
+  }) => Promise<void>
+  updateProfile: (patch: ProfileUpdate) => Promise<void>
+  completeAssignment: (id: string) => Promise<void>
+  acceptAssignment: (id: string) => Promise<void>
+  releaseAssignment: (id: string) => Promise<void>
+  createRequest: (input: NewRequest) => Promise<void>
+  setEnergy: (energy: Energy) => Promise<void>
+  addShopping: (label: string) => Promise<void>
+  toggleShopping: (id: string) => Promise<void>
+  removeShopping: (id: string) => Promise<void>
+  saveMeal: (draft: MealDraft) => Promise<void>
+  removeMeal: (id: string) => Promise<void>
+  signOut: () => Promise<void>
   memberById: (id: string | null) => Member | undefined
   assignmentById: (id: string) => Assignment | undefined
 }
@@ -46,31 +107,161 @@ function compareDue(a: Assignment, b: Assignment): number {
   return (a.dueTime ?? '99:99').localeCompare(b.dueTime ?? '99:99')
 }
 
+function errorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message
+  return 'Une erreur est survenue.'
+}
+
 export function HouseholdProvider({ children }: { children: ReactNode }) {
-  const [initial] = useState(createInitialState)
-  const [members, setMembers] = useState(initial.members)
-  const [assignments, setAssignments] = useState(initial.assignments)
-  const [meals] = useState(initial.meals)
-  const [shopping, setShopping] = useState(initial.shopping)
+  const [status, setStatus] = useState<AppStatus>(
+    isSupabaseConfigured ? 'loading' : 'unconfigured',
+  )
+  const [error, setError] = useState<string | null>(null)
+  const [today, setToday] = useState<string>(() => parisToday())
+  const [userId, setUserId] = useState<string | null>(null)
+  const [household, setHousehold] = useState<Household | null>(null)
+  const [members, setMembers] = useState<Member[]>([])
+  const [assignments, setAssignments] = useState<Assignment[]>([])
+  const [meals, setMeals] = useState<Meal[]>([])
+  const [shopping, setShopping] = useState<ShoppingItem[]>([])
   const [sheet, setSheet] = useState<SheetState>({ type: 'none' })
-  const today = initial.today
+
+  const refreshAll = useCallback(async () => {
+    if (!isSupabaseConfigured) return
+    try {
+      const uid = await getSessionUserId()
+      setUserId(uid)
+      if (!uid) {
+        setHousehold(null)
+        setMembers([])
+        setAssignments([])
+        setMeals([])
+        setShopping([])
+        setStatus('onboarding')
+        return
+      }
+
+      const state = await loadHouseholdState(uid)
+      if (!state.household) {
+        setHousehold(null)
+        setMembers([])
+        setAssignments([])
+        setMeals([])
+        setShopping([])
+        setStatus('onboarding')
+        return
+      }
+
+      const [nextAssignments, nextMeals, nextShopping] = await Promise.all([
+        fetchAssignments(state.household.id),
+        fetchMeals(state.household.id),
+        fetchShopping(state.household.id),
+      ])
+
+      setHousehold(state.household)
+      setMembers(state.members)
+      setAssignments(nextAssignments)
+      setMeals(nextMeals)
+      setShopping(nextShopping)
+      setError(null)
+      setStatus('ready')
+    } catch (err) {
+      setError(errorMessage(err))
+      setStatus('onboarding')
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return
+    const timer = window.setTimeout(() => {
+      void refreshAll()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [refreshAll])
+
+  useEffect(() => {
+    function syncDate() {
+      setToday(parisToday())
+    }
+    document.addEventListener('visibilitychange', syncDate)
+    return () => document.removeEventListener('visibilitychange', syncDate)
+  }, [])
+
+  useEffect(() => {
+    if (!supabase || !household?.id || !userId) return
+    const householdId = household.id
+    const filter = `household_id=eq.${householdId}`
+
+    const channel = supabase
+      .channel(`household:${householdId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'profiles', filter },
+        () => {
+          void loadHouseholdState(userId)
+            .then((state) => {
+              if (state.household) setHousehold(state.household)
+              setMembers(state.members)
+            })
+            .catch(() => {})
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'assignments', filter },
+        () => {
+          void fetchAssignments(householdId)
+            .then(setAssignments)
+            .catch(() => {})
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'meals', filter },
+        () => {
+          void fetchMeals(householdId)
+            .then(setMeals)
+            .catch(() => {})
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'shopping_items', filter },
+        () => {
+          void fetchShopping(householdId)
+            .then(setShopping)
+            .catch(() => {})
+        },
+      )
+      .subscribe()
+
+    return () => {
+      void supabase?.removeChannel(channel)
+    }
+  }, [household?.id, userId])
 
   const value = useMemo<HouseholdValue>(() => {
-    const currentUser = members.find((member) => member.id === currentUserId) ?? members[0]
-    const myTasks = assignments
-      .filter((item) => item.status === 'accepted' && item.assigneeId === currentUserId)
-      .sort(compareDue)
-    const proposals = assignments
-      .filter(
-        (item) =>
-          item.status === 'open' &&
-          item.requestedBy !== currentUserId &&
-          (item.assigneeId === null || item.assigneeId === currentUserId),
-      )
-      .sort(compareDue)
-    const sent = assignments
-      .filter((item) => item.status === 'open' && item.requestedBy === currentUserId)
-      .sort(compareDue)
+    const currentUser = userId ? (members.find((member) => member.id === userId) ?? null) : null
+    const myTasks = userId
+      ? assignments
+          .filter((item) => item.status === 'accepted' && item.assigneeId === userId)
+          .sort(compareDue)
+      : []
+    const proposals = userId
+      ? assignments
+          .filter(
+            (item) =>
+              item.status === 'open' &&
+              item.requestedBy !== userId &&
+              (item.assigneeId === null || item.assigneeId === userId),
+          )
+          .sort(compareDue)
+      : []
+    const sent = userId
+      ? assignments
+          .filter((item) => item.status === 'open' && item.requestedBy === userId)
+          .sort(compareDue)
+      : []
     const nextMeal =
       meals
         .filter((meal) => meal.servedOn >= today)
@@ -79,11 +270,26 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
             a.servedOn.localeCompare(b.servedOn) || slotOrder[a.slot] - slotOrder[b.slot],
         )[0] ?? null
 
+    async function run(action: () => Promise<void>) {
+      setError(null)
+      try {
+        await action()
+      } catch (err) {
+        const message = errorMessage(err)
+        setError(message)
+        throw new Error(message)
+      }
+    }
+
     return {
+      status,
+      error,
+      clearError: () => setError(null),
       today,
+      household,
       currentUser,
       members,
-      others: members.filter((member) => member.id !== currentUserId),
+      others: userId ? members.filter((member) => member.id !== userId) : [],
       myTasks,
       proposals,
       sent,
@@ -95,80 +301,126 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
       openRequest: (assigneeId) => setSheet({ type: 'request', assigneeId }),
       openDetail: (assignmentId) => setSheet({ type: 'detail', assignmentId }),
       closeSheet: () => setSheet({ type: 'none' }),
-      completeAssignment: (id) => {
-        setAssignments((current) =>
-          current.map((item) =>
-            item.id === id && item.assigneeId === currentUserId && item.status === 'accepted'
-              ? { ...item, status: 'done' }
-              : item,
-          ),
-        )
-        setSheet((current) =>
-          current.type === 'detail' && current.assignmentId === id ? { type: 'none' } : current,
-        )
+      createHousehold: async (input) => {
+        await run(async () => {
+          await createHouseholdApi(input)
+          await refreshAll()
+        })
       },
-      acceptAssignment: (id) => {
-        setAssignments((current) =>
-          current.map((item) => {
-            if (item.id !== id || item.status !== 'open' || item.requestedBy === currentUserId) {
-              return item
-            }
-            if (item.assigneeId !== null && item.assigneeId !== currentUserId) return item
-            return { ...item, assigneeId: currentUserId, status: 'accepted' }
-          }),
-        )
+      joinHousehold: async (input) => {
+        await run(async () => {
+          await joinHouseholdApi(input)
+          await refreshAll()
+        })
       },
-      releaseAssignment: (id) => {
-        setAssignments((current) =>
-          current.map((item) => {
-            if (item.id !== id || item.assigneeId !== currentUserId || item.status !== 'accepted') {
-              return item
-            }
-            return {
-              ...item,
-              assigneeId: null,
-              status: 'open',
-              kind: item.kind === 'paid' ? 'paid' : 'offer',
-            }
-          }),
-        )
-        setSheet({ type: 'none' })
+      updateProfile: async (patch) => {
+        if (!userId) return
+        await run(async () => {
+          await updateSelfProfile(userId, patch)
+          const state = await loadHouseholdState(userId)
+          setMembers(state.members)
+        })
       },
-      createRequest: (input) => {
-        const title = input.title.trim()
-        if (!title || input.assigneeId === currentUserId) return
-        const kind = input.priceCents != null ? 'paid' : input.assigneeId ? 'request' : 'offer'
-        setAssignments((current) => [
-          ...current,
-          {
-            id: crypto.randomUUID(),
-            title,
-            kind,
-            status: 'open',
-            assigneeId: input.assigneeId,
-            requestedBy: currentUserId,
-            dueOn: input.dueOn,
-            priceCents: input.priceCents,
-          },
-        ])
-        setSheet({ type: 'none' })
+      completeAssignment: async (id) => {
+        if (!household) return
+        await run(async () => {
+          await completeAssignmentRpc(id)
+          setSheet((current) =>
+            current.type === 'detail' && current.assignmentId === id ? { type: 'none' } : current,
+          )
+          setAssignments(await fetchAssignments(household.id))
+        })
       },
-      setEnergy: (energy) => {
-        setMembers((current) =>
-          current.map((member) =>
-            member.id === currentUserId ? { ...member, energy } : member,
-          ),
-        )
+      acceptAssignment: async (id) => {
+        if (!household) return
+        await run(async () => {
+          await acceptAssignmentRpc(id)
+          setAssignments(await fetchAssignments(household.id))
+        })
       },
-      toggleShopping: (id) => {
-        setShopping((current) =>
-          current.map((item) => (item.id === id ? { ...item, done: !item.done } : item)),
-        )
+      releaseAssignment: async (id) => {
+        if (!household) return
+        await run(async () => {
+          await releaseAssignmentRpc(id)
+          setSheet({ type: 'none' })
+          setAssignments(await fetchAssignments(household.id))
+        })
+      },
+      createRequest: async (input) => {
+        if (!household || !userId) return
+        if (!input.title.trim() || input.assigneeId === userId) return
+        await run(async () => {
+          await createRequestRpc(input)
+          setSheet({ type: 'none' })
+          setAssignments(await fetchAssignments(household.id))
+        })
+      },
+      setEnergy: async (energy) => {
+        if (!userId || !household) return
+        await run(async () => {
+          setMembers((current) =>
+            current.map((member) => (member.id === userId ? { ...member, energy } : member)),
+          )
+          await updateSelfEnergy(userId, household.id, energy)
+        })
+      },
+      addShopping: async (label) => {
+        if (!household || !userId || !label.trim()) return
+        await run(async () => {
+          await addShoppingItemApi(household.id, userId, label)
+          setShopping(await fetchShopping(household.id))
+        })
+      },
+      toggleShopping: async (id) => {
+        if (!household) return
+        const target = shopping.find((item) => item.id === id)
+        if (!target) return
+        const nextDone = !target.done
+        await run(async () => {
+          setShopping((current) =>
+            current.map((item) => (item.id === id ? { ...item, done: nextDone } : item)),
+          )
+          await toggleShoppingItem(id, nextDone)
+        })
+      },
+      removeShopping: async (id) => {
+        if (!household) return
+        await run(async () => {
+          setShopping((current) => current.filter((item) => item.id !== id))
+          await removeShoppingItemApi(id)
+        })
+      },
+      saveMeal: async (draft) => {
+        if (!household || !draft.title.trim()) return
+        await run(async () => {
+          await upsertMealApi(household.id, draft)
+          setMeals(await fetchMeals(household.id))
+        })
+      },
+      removeMeal: async (id) => {
+        if (!household) return
+        await run(async () => {
+          await deleteMealApi(id)
+          setMeals(await fetchMeals(household.id))
+        })
+      },
+      signOut: async () => {
+        await run(async () => {
+          await signOutDevice()
+          setSheet({ type: 'none' })
+          setUserId(null)
+          setHousehold(null)
+          setMembers([])
+          setAssignments([])
+          setMeals([])
+          setShopping([])
+          setStatus('onboarding')
+        })
       },
       memberById: (id) => members.find((member) => member.id === id),
       assignmentById: (id) => assignments.find((item) => item.id === id),
     }
-  }, [assignments, meals, members, sheet, shopping, today])
+  }, [assignments, error, household, meals, members, refreshAll, sheet, shopping, status, today, userId])
 
   return createElement(HouseholdContext, { value }, children)
 }

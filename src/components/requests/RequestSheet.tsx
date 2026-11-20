@@ -32,21 +32,29 @@ export function RequestSheet({ assigneeId }: { assigneeId: string | null }) {
   const [who, setWho] = useState(assigneeId ?? 'all')
   const [when, setWhen] = useState('today')
   const [price, setPrice] = useState('none')
+  const [busy, setBusy] = useState(false)
 
   const custom = reason === 'autre'
   const title = custom ? customTitle.trim() : (reasons.find((item) => item.id === reason)?.label ?? '')
-  const canSubmit = title.length > 0 && who !== ''
+  const canSubmit = !busy && title.length > 0 && who !== ''
 
-  function submit() {
+  async function submit() {
     if (!canSubmit) return
+    setBusy(true)
     const offset = whens.find((item) => item.id === when)?.offset ?? 0
     const cents = prices.find((item) => item.id === price)?.cents ?? null
-    createRequest({
-      title,
-      assigneeId: who === 'all' ? null : who,
-      dueOn: addDays(today, offset),
-      priceCents: cents,
-    })
+    try {
+      await createRequest({
+        title,
+        assigneeId: who === 'all' ? null : who,
+        dueOn: addDays(today, offset),
+        priceCents: cents,
+      })
+    } catch {
+      // L'erreur est affichée dans AppShell
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -125,9 +133,9 @@ export function RequestSheet({ assigneeId }: { assigneeId: string | null }) {
           type="button"
           className="min-h-11 rounded-full bg-lime-300 font-bold disabled:opacity-50"
           disabled={!canSubmit}
-          onClick={submit}
+          onClick={() => void submit()}
         >
-          Valider
+          {busy ? 'Envoi…' : 'Valider'}
         </button>
       </div>
     </Sheet>

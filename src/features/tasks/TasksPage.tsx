@@ -16,7 +16,7 @@ export function TasksPage() {
             key={task.id}
             task={task}
             today={today}
-            onDone={() => completeAssignment(task.id)}
+            onDone={() => void completeAssignment(task.id).catch(() => {})}
             onOpen={() => openDetail(task.id)}
           />
         ))}
