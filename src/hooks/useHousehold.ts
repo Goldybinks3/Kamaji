@@ -10,6 +10,7 @@ import {
 } from 'react'
 import { parisToday } from '../lib/dates.ts'
 import { remindEveningTasks, showNotice } from '../lib/notify.ts'
+import { notifyProfile } from '../lib/push.ts'
 import { isSupabaseConfigured, supabase } from '../lib/supabase.ts'
 import { openSlotsFor } from '../lib/slots.ts'
 import {
@@ -47,6 +48,7 @@ import {
   toggleShoppingItem,
   upsertMeal as upsertMealApi,
 } from '../services/meals.ts'
+import { fetchDebts } from '../services/debts.ts'
 import {
   fetchInbox,
   markNotDoneRpc,
@@ -55,9 +57,12 @@ import {
   sendThanks as sendThanksApi,
   settlePastDays,
 } from '../services/presence.ts'
+import { addTemplate as addTemplateApi, fetchTemplates, prepareWeek as prepareWeekApi, removeTemplate as removeTemplateApi } from '../services/templates.ts'
 import type {
   Absence,
   Assignment,
+  ChoreTemplate,
+  Debt,
   AvatarKey,
   CalendarPeriod,
   Energy,
@@ -124,6 +129,17 @@ type HouseholdValue = {
   absences: Absence[]
   pings: Ping[]
   thanks: ThanksNote[]
+  assignments: Assignment[]
+  templates: ChoreTemplate[]
+  debts: Debt[]
+  addTemplate: (input: {
+    title: string
+    effort: ChoreTemplate['effort']
+    weekdays: number[]
+    slot: MealSlot | null
+  }) => Promise<void>
+  removeTemplate: (id: string) => Promise<void>
+  prepareWeek: (monday: string) => Promise<void>
   saveRhythm: (rhythm: HouseholdRhythm) => Promise<void>
   addPeriod: (input: {
     label: string
@@ -175,6 +191,8 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
   const [absences, setAbsences] = useState<Absence[]>([])
   const [pings, setPings] = useState<Ping[]>([])
   const [thanks, setThanks] = useState<ThanksNote[]>([])
+  const [templates, setTemplates] = useState<ChoreTemplate[]>([])
+  const [debts, setDebts] = useState<Debt[]>([])
   const [sheet, setSheet] = useState<SheetState>({ type: 'none' })
 
   const refreshAll = useCallback(async () => {
@@ -193,6 +211,8 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         setAbsences([])
         setPings([])
         setThanks([])
+        setTemplates([])
+        setDebts([])
         setStatus('onboarding')
         return
       }
@@ -209,6 +229,8 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         setAbsences([])
         setPings([])
         setThanks([])
+        setTemplates([])
+        setDebts([])
         setStatus('onboarding')
         return
       }
@@ -252,6 +274,17 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         setPeriods([])
         setAbsences([])
         setError(errorMessage(err))
+      }
+
+      try {
+        setTemplates(await fetchTemplates(state.household.id))
+      } catch {
+        setTemplates([])
+      }
+      try {
+        setDebts(await fetchDebts(state.household.id))
+      } catch {
+        setDebts([])
       }
     } catch (err) {
       setError(errorMessage(err))
@@ -475,6 +508,11 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
             current.type === 'detail' && current.assignmentId === id ? { type: 'none' } : current,
           )
           setAssignments(await fetchAssignments(household.id, today))
+          try {
+            setDebts(await fetchDebts(household.id))
+          } catch {
+            setDebts([])
+          }
         })
       },
       acceptAssignment: async (id) => {
@@ -499,6 +537,12 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
           await createRequestRpc(input)
           setSheet({ type: 'none' })
           setAssignments(await fetchAssignments(household.id, today))
+          const targets = input.assigneeId
+            ? [input.assigneeId]
+            : members.filter((member) => member.id !== userId).map((member) => member.id)
+          for (const target of targets) {
+            void notifyProfile(target, 'Kamaji', input.title.trim())
+          }
         })
       },
       setEnergy: async (energy) => {
@@ -555,6 +599,30 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
       absences,
       pings,
       thanks,
+      assignments,
+      templates,
+      debts,
+      addTemplate: async (input) => {
+        if (!household) return
+        await run(async () => {
+          await addTemplateApi(household.id, input)
+          setTemplates(await fetchTemplates(household.id))
+        })
+      },
+      removeTemplate: async (id) => {
+        if (!household) return
+        await run(async () => {
+          await removeTemplateApi(id)
+          setTemplates(await fetchTemplates(household.id))
+        })
+      },
+      prepareWeek: async (monday) => {
+        if (!household) return
+        await run(async () => {
+          await prepareWeekApi(monday)
+          setAssignments(await fetchAssignments(household.id, today))
+        })
+      },
       saveRhythm: async (next) => {
         if (!household) return
         await run(async () => {
@@ -596,12 +664,18 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
           await markNotDoneRpc(id)
           setSheet({ type: 'none' })
           setAssignments(await fetchAssignments(household.id, today))
+          try {
+            setDebts(await fetchDebts(household.id))
+          } catch {
+            setDebts([])
+          }
         })
       },
       sendPing: async (toId, body) => {
         if (!household || !userId || !body.trim()) return
         await run(async () => {
           await sendPingApi({ householdId: household.id, fromId: userId, toId, body })
+          void notifyProfile(toId, 'Kamaji', body.trim())
         })
       },
       dismissPing: async (id) => {
@@ -614,6 +688,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         if (!household || !userId || toId === userId) return
         await run(async () => {
           await sendThanksApi({ householdId: household.id, fromId: userId, toId, assignmentId })
+          void notifyProfile(toId, 'Kamaji', 'On t’a dit merci')
         })
       },
       signOut: async () => {
@@ -631,13 +706,15 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
           setAbsences([])
           setPings([])
           setThanks([])
+          setTemplates([])
+          setDebts([])
           setStatus('onboarding')
         })
       },
       memberById: (id) => members.find((member) => member.id === id),
       assignmentById: (id) => assignments.find((item) => item.id === id),
     }
-  }, [absences, assignments, error, household, meals, members, periods, pings, refreshAll, rhythm, sheet, shopping, status, thanks, today, userId])
+  }, [absences, assignments, debts, error, household, meals, members, periods, pings, refreshAll, rhythm, sheet, shopping, status, templates, thanks, today, userId])
 
   useEffect(() => {
     if (status !== 'ready' || !userId) return

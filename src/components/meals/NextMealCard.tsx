@@ -18,6 +18,16 @@ export function NextMealCard() {
           <>
             <p className="text-sm text-neutral-600">{formatDue(nextMeal.servedOn, today)}</p>
             <p className="mt-1 text-xl font-bold">{nextMeal.title}</p>
+            {nextMeal.recipeUrl ? (
+              <a
+                className="mt-3 inline-flex min-h-11 items-center font-bold text-violet-700 underline"
+                href={nextMeal.recipeUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Voir la recette
+              </a>
+            ) : null}
           </>
         ) : (
           <p className="text-xl font-bold">Aucun repas prévu</p>

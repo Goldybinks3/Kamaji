@@ -1,6 +1,7 @@
 import { ProposalCard } from '../../components/tasks/ProposalCard.tsx'
 import { TaskCard } from '../../components/tasks/TaskCard.tsx'
 import { useHousehold } from '../../hooks/useHousehold.ts'
+import { WeekSection } from './WeekSection.tsx'
 
 export function TasksPage() {
   const { myTasks, proposals, sent, assumedTasks, today, completeAssignment, openDetail, openRequest, memberById } =
@@ -61,6 +62,7 @@ export function TasksPage() {
           })}
         </section>
       ) : null}
+      <WeekSection />
       <div className="flex flex-col items-center pt-2">
         <p className="text-sm text-neutral-600">Demander</p>
         <button

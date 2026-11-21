@@ -30,6 +30,7 @@ export function MealsPage() {
   const [slot, setSlot] = useState<MealSlot>('dinner')
   const [mealTitle, setMealTitle] = useState('')
   const [cookId, setCookId] = useState<string>('')
+  const [recipeUrl, setRecipeUrl] = useState('')
   const [editingMealId, setEditingMealId] = useState<string | null>(null)
   const [savingMeal, setSavingMeal] = useState(false)
 
@@ -40,11 +41,13 @@ export function MealsPage() {
       setSlot(existing.slot)
       setMealTitle(existing.title)
       setCookId(existing.cookId ?? '')
+      setRecipeUrl(existing.recipeUrl ?? '')
       setEditingMealId(existing.id)
     } else {
       setSlot(open[0] ?? 'dinner')
       setMealTitle('')
       setCookId('')
+      setRecipeUrl('')
       setEditingMealId(null)
     }
   }
@@ -56,8 +59,10 @@ export function MealsPage() {
     if (existing) {
       setMealTitle(existing.title)
       setCookId(existing.cookId ?? '')
+      setRecipeUrl(existing.recipeUrl ?? '')
       setEditingMealId(existing.id)
     } else {
+      setRecipeUrl('')
       setEditingMealId(null)
     }
   }
@@ -72,6 +77,7 @@ export function MealsPage() {
         slot,
         title: mealTitle,
         cookId: cookId || null,
+        recipeUrl,
       })
       setEditingDay(null)
     } catch {
@@ -140,15 +146,26 @@ export function MealsPage() {
                   items.map((meal) => {
                     const cook = memberById(meal.cookId)
                     return (
-                      <button
-                        key={meal.id}
-                        type="button"
-                        className="block w-full py-1 text-left"
-                        onClick={() => openDayEditor(day, meal)}
-                      >
-                        {slotLabel[meal.slot]} : {meal.title}
-                        {cook ? ` · ${cook.displayName}` : ''}
-                      </button>
+                      <div key={meal.id} className="flex items-center gap-2 py-1">
+                        <button
+                          type="button"
+                          className="min-h-11 flex-1 text-left"
+                          onClick={() => openDayEditor(day, meal)}
+                        >
+                          {slotLabel[meal.slot]} : {meal.title}
+                          {cook ? ` · ${cook.displayName}` : ''}
+                        </button>
+                        {meal.recipeUrl ? (
+                          <a
+                            className="inline-flex min-h-11 items-center font-bold text-violet-700 underline"
+                            href={meal.recipeUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Recette
+                          </a>
+                        ) : null}
+                      </div>
                     )
                   })
                 )}
@@ -239,6 +256,16 @@ export function MealsPage() {
                 value={mealTitle}
                 onChange={(event) => setMealTitle(event.target.value)}
                 required
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-sm font-bold">Lien recette</span>
+              <input
+                type="url"
+                className="min-h-11 rounded-2xl border border-neutral-300 px-3 text-base"
+                placeholder="https://"
+                value={recipeUrl}
+                onChange={(event) => setRecipeUrl(event.target.value)}
               />
             </label>
             <label className="grid gap-1">

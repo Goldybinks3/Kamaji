@@ -46,6 +46,7 @@ export type Meal = {
   slot: MealSlot
   title: string
   cookId: string | null
+  recipeUrl?: string
 }
 
 export type ShoppingItem = {
@@ -104,6 +105,24 @@ export type MealDraft = {
   slot: MealSlot
   title: string
   cookId: string | null
+  recipeUrl?: string | null
+}
+
+export type Effort = 'light' | 'normal' | 'heavy'
+
+export type ChoreTemplate = {
+  id: string
+  title: string
+  effort: Effort
+  weekdays: number[]
+  slot: MealSlot | null
+}
+
+export type Debt = {
+  id: string
+  debtorId: string
+  creditorId: string
+  amountCents: number
 }
 
 export type ProfileUpdate = {

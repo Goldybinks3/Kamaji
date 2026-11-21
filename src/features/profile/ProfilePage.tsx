@@ -2,7 +2,10 @@ import { useState, type FormEvent } from 'react'
 import { InviteCard } from '../../components/family/InviteCard.tsx'
 import { MemberAvatar } from '../../components/family/MemberAvatar.tsx'
 import { useHousehold } from '../../hooks/useHousehold.ts'
-import { canNotify, requestNotifyPermission } from '../../lib/notify.ts'
+import { balanceLines } from '../../lib/balances.ts'
+import { formatPrice } from '../../lib/dates.ts'
+import { canNotify } from '../../lib/notify.ts'
+import { enablePush } from '../../lib/push.ts'
 import { avatarKeys, type AvatarKey, type Energy, type Member } from '../../types/domain.ts'
 import { CalendarSettings } from './CalendarSettings.tsx'
 
@@ -103,7 +106,7 @@ function ProfileEditForm({
 }
 
 export function ProfilePage() {
-  const { currentUser, household, setEnergy, updateProfile, signOut, thanks, memberById } =
+  const { currentUser, household, setEnergy, updateProfile, signOut, thanks, memberById, debts } =
     useHousehold()
   const [confirmOut, setConfirmOut] = useState(false)
   const [notifyLabel, setNotifyLabel] = useState(() =>
@@ -157,6 +160,23 @@ export function ProfilePage() {
 
       <CalendarSettings />
 
+      <section className="grid w-full gap-2">
+        <h2 className="text-lg font-bold">Entre nous</h2>
+        {balanceLines(debts, currentUser.id).length === 0 ? (
+          <p className="text-sm text-neutral-600">Rien à régler.</p>
+        ) : (
+          balanceLines(debts, currentUser.id).map((line) => {
+            const name = memberById(line.otherId)?.displayName ?? 'Quelqu’un'
+            const amount = formatPrice(Math.abs(line.cents))
+            return (
+              <p key={line.otherId} className="rounded-2xl bg-neutral-100 px-4 py-3 text-sm">
+                {line.cents < 0 ? `Tu dois ${amount} à ${name}` : `${name} te doit ${amount}`}
+              </p>
+            )
+          })
+        )}
+      </section>
+
       {thanks.length > 0 ? (
         <section className="grid w-full gap-2">
           <h2 className="text-lg font-bold">Mercis</h2>
@@ -172,18 +192,21 @@ export function ProfilePage() {
       <section className="grid w-full gap-2">
         <h2 className="text-lg font-bold">Notifications</h2>
         <p className="text-sm text-neutral-600">
-          Un rappel après 17 h si des tâches restent, et un message quand quelqu’un t’écrit pendant
-          que Kamaji est ouvert. Sur iPhone, ajoute d’abord Kamaji à l’écran d’accueil depuis Safari.
+          Un rappel après 17 h, et un message quand quelqu’un t’écrit, même si le téléphone est
+          fermé. Sur iPhone, ajoute d’abord Kamaji à l’écran d’accueil depuis Safari.
         </p>
         <button
           type="button"
           className="min-h-11 rounded-full border border-neutral-300 font-bold"
           onClick={() => {
-            void requestNotifyPermission().then((result) => {
-              setNotifyLabel(
-                result === 'granted' ? 'Notifications activées' : 'Notifications refusées',
-              )
-            })
+            void enablePush(currentUser.id)
+              .then((result) => {
+                if (result === 'granted') setNotifyLabel('Notifications activées')
+                else if (result === 'missing-key') {
+                  setNotifyLabel('Autorisées ici. La clé publique manque pour le téléphone fermé.')
+                } else setNotifyLabel('Notifications refusées')
+              })
+              .catch(() => setNotifyLabel('Notifications refusées'))
           }}
         >
           {notifyLabel}
