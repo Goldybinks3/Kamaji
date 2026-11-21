@@ -34,6 +34,8 @@ export type Assignment = {
   dueOn: string
   dueTime?: string
   priceCents?: number | null
+  slot: MealSlot | null
+  assumed: boolean
 }
 
 export type MealSlot = 'lunch' | 'dinner'
@@ -58,6 +60,43 @@ export type NewRequest = {
   dueOn: string
   dueTime?: string | null
   priceCents: number | null
+  slot: MealSlot | null
+}
+
+export type HouseholdRhythm = {
+  weekdaySlots: MealSlot[]
+  weekendSlots: MealSlot[]
+}
+
+export type CalendarPeriod = {
+  id: string
+  label: string
+  startsOn: string
+  endsOn: string
+  slots: MealSlot[]
+}
+
+export type Absence = {
+  id: string
+  profileId: string
+  startsOn: string
+  endsOn: string
+}
+
+export type Ping = {
+  id: string
+  fromProfileId: string
+  toProfileId: string
+  body: string
+  createdAt: string
+}
+
+export type ThanksNote = {
+  id: string
+  fromProfileId: string
+  toProfileId: string
+  note: string | null
+  createdAt: string
 }
 
 export type MealDraft = {

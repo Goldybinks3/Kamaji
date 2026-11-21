@@ -1,4 +1,5 @@
 import { formatDue, formatPrice, formatTime } from '../../lib/dates.ts'
+import { slotLabel } from '../../lib/slots.ts'
 import type { Assignment } from '../../types/domain.ts'
 
 export function TaskCard({
@@ -12,7 +13,9 @@ export function TaskCard({
   onDone: () => void
   onOpen: () => void
 }) {
-  const when = [formatDue(task.dueOn, today), formatTime(task.dueTime)].filter(Boolean).join(' · ')
+  const when = [formatDue(task.dueOn, today), task.slot ? slotLabel[task.slot] : null, formatTime(task.dueTime)]
+    .filter(Boolean)
+    .join(' · ')
   const price = formatPrice(task.priceCents)
 
   return (

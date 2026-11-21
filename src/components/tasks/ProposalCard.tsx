@@ -1,4 +1,5 @@
 import { formatDue, formatPrice } from '../../lib/dates.ts'
+import { slotLabel } from '../../lib/slots.ts'
 import { useHousehold } from '../../hooks/useHousehold.ts'
 import type { Assignment } from '../../types/domain.ts'
 
@@ -14,6 +15,7 @@ export function ProposalCard({ task, today }: { task: Assignment; today: string 
         <p className="text-lg font-bold">{task.title}</p>
         <p className="text-sm text-violet-950/70">
           {formatDue(task.dueOn, today)}
+          {task.slot ? ` · ${slotLabel[task.slot]}` : ''}
           {price ? ` · ${price}` : ''}
         </p>
       </div>

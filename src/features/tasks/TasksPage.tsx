@@ -3,7 +3,7 @@ import { TaskCard } from '../../components/tasks/TaskCard.tsx'
 import { useHousehold } from '../../hooks/useHousehold.ts'
 
 export function TasksPage() {
-  const { myTasks, proposals, sent, today, completeAssignment, openDetail, openRequest, memberById } =
+  const { myTasks, proposals, sent, assumedTasks, today, completeAssignment, openDetail, openRequest, memberById } =
     useHousehold()
 
   return (
@@ -22,6 +22,24 @@ export function TasksPage() {
         ))}
         {myTasks.length === 0 ? <p>Rien à faire pour le moment.</p> : null}
       </section>
+      {assumedTasks.length > 0 ? (
+        <section className="grid gap-2">
+          <h2 className="text-lg font-bold">Considérées faites</h2>
+          <p className="text-sm text-neutral-600">
+            Ouvre une tâche pour dire qu’elle n’a pas été faite.
+          </p>
+          {assumedTasks.map((task) => (
+            <button
+              key={task.id}
+              type="button"
+              className="min-h-11 rounded-2xl bg-neutral-100 px-4 py-3 text-left"
+              onClick={() => openDetail(task.id)}
+            >
+              {task.title}
+            </button>
+          ))}
+        </section>
+      ) : null}
       <section className="grid gap-3">
         <h2 className="text-lg font-bold">Propositions</h2>
         {proposals.map((task) => (

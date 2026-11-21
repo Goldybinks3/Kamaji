@@ -9,7 +9,9 @@ import {
   type ReactNode,
 } from 'react'
 import { parisToday } from '../lib/dates.ts'
+import { remindEveningTasks, showNotice } from '../lib/notify.ts'
 import { isSupabaseConfigured, supabase } from '../lib/supabase.ts'
+import { openSlotsFor } from '../lib/slots.ts'
 import {
   acceptAssignmentRpc,
   completeAssignmentRpc,
@@ -27,6 +29,16 @@ import {
   updateSelfProfile,
 } from '../services/household.ts'
 import {
+  addAbsence as addAbsenceApi,
+  addPeriod as addPeriodApi,
+  fetchAbsences,
+  fetchPeriods,
+  fetchRhythm,
+  removeAbsence as removeAbsenceApi,
+  removePeriod as removePeriodApi,
+  saveRhythm as saveRhythmApi,
+} from '../services/calendar.ts'
+import {
   addShoppingItem as addShoppingItemApi,
   deleteMeal as deleteMealApi,
   fetchMeals,
@@ -35,18 +47,32 @@ import {
   toggleShoppingItem,
   upsertMeal as upsertMealApi,
 } from '../services/meals.ts'
+import {
+  fetchInbox,
+  markNotDoneRpc,
+  markPingRead,
+  sendPing as sendPingApi,
+  sendThanks as sendThanksApi,
+  settlePastDays,
+} from '../services/presence.ts'
 import type {
+  Absence,
   Assignment,
   AvatarKey,
+  CalendarPeriod,
   Energy,
   Household,
+  HouseholdRhythm,
   Meal,
   MealDraft,
+  MealSlot,
   Member,
   NewRequest,
+  Ping,
   ProfileUpdate,
   SheetState,
   ShoppingItem,
+  ThanksNote,
 } from '../types/domain.ts'
 
 export type AppStatus = 'unconfigured' | 'loading' | 'onboarding' | 'ready'
@@ -63,6 +89,7 @@ type HouseholdValue = {
   myTasks: Assignment[]
   proposals: Assignment[]
   sent: Assignment[]
+  assumedTasks: Assignment[]
   meals: Meal[]
   nextMeal: Meal | null
   shopping: ShoppingItem[]
@@ -92,6 +119,25 @@ type HouseholdValue = {
   removeShopping: (id: string) => Promise<void>
   saveMeal: (draft: MealDraft) => Promise<void>
   removeMeal: (id: string) => Promise<void>
+  rhythm: HouseholdRhythm | null
+  periods: CalendarPeriod[]
+  absences: Absence[]
+  pings: Ping[]
+  thanks: ThanksNote[]
+  saveRhythm: (rhythm: HouseholdRhythm) => Promise<void>
+  addPeriod: (input: {
+    label: string
+    startsOn: string
+    endsOn: string
+    slots: MealSlot[]
+  }) => Promise<void>
+  removePeriod: (id: string) => Promise<void>
+  addAbsence: (input: { profileId: string; startsOn: string; endsOn: string }) => Promise<void>
+  removeAbsence: (id: string) => Promise<void>
+  markNotDone: (id: string) => Promise<void>
+  sendPing: (toId: string, body: string) => Promise<void>
+  dismissPing: (id: string) => Promise<void>
+  sendThanks: (toId: string, assignmentId?: string) => Promise<void>
   signOut: () => Promise<void>
   memberById: (id: string | null) => Member | undefined
   assignmentById: (id: string) => Assignment | undefined
@@ -124,6 +170,11 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
   const [assignments, setAssignments] = useState<Assignment[]>([])
   const [meals, setMeals] = useState<Meal[]>([])
   const [shopping, setShopping] = useState<ShoppingItem[]>([])
+  const [rhythm, setRhythm] = useState<HouseholdRhythm | null>(null)
+  const [periods, setPeriods] = useState<CalendarPeriod[]>([])
+  const [absences, setAbsences] = useState<Absence[]>([])
+  const [pings, setPings] = useState<Ping[]>([])
+  const [thanks, setThanks] = useState<ThanksNote[]>([])
   const [sheet, setSheet] = useState<SheetState>({ type: 'none' })
 
   const refreshAll = useCallback(async () => {
@@ -137,6 +188,11 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         setAssignments([])
         setMeals([])
         setShopping([])
+        setRhythm(null)
+        setPeriods([])
+        setAbsences([])
+        setPings([])
+        setThanks([])
         setStatus('onboarding')
         return
       }
@@ -148,12 +204,24 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         setAssignments([])
         setMeals([])
         setShopping([])
+        setRhythm(null)
+        setPeriods([])
+        setAbsences([])
+        setPings([])
+        setThanks([])
         setStatus('onboarding')
         return
       }
 
+      const day = parisToday()
+      try {
+        await settlePastDays()
+      } catch {
+        // La fonction arrive avec la migration. Le foyer reste utilisable avant.
+      }
+
       const [nextAssignments, nextMeals, nextShopping] = await Promise.all([
-        fetchAssignments(state.household.id),
+        fetchAssignments(state.household.id, day),
         fetchMeals(state.household.id),
         fetchShopping(state.household.id),
       ])
@@ -163,8 +231,28 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
       setAssignments(nextAssignments)
       setMeals(nextMeals)
       setShopping(nextShopping)
-      setError(null)
+      setToday(day)
       setStatus('ready')
+
+      try {
+        const [nextRhythm, nextPeriods, nextAbsences, inbox] = await Promise.all([
+          fetchRhythm(state.household.id),
+          fetchPeriods(state.household.id),
+          fetchAbsences(state.household.id),
+          fetchInbox(uid),
+        ])
+        setRhythm(nextRhythm)
+        setPeriods(nextPeriods)
+        setAbsences(nextAbsences)
+        setPings(inbox.pings)
+        setThanks(inbox.thanks)
+        setError(null)
+      } catch (err) {
+        setRhythm(null)
+        setPeriods([])
+        setAbsences([])
+        setError(errorMessage(err))
+      }
     } catch (err) {
       setError(errorMessage(err))
       setStatus('onboarding')
@@ -210,7 +298,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'assignments', filter },
         () => {
-          void fetchAssignments(householdId)
+          void fetchAssignments(householdId, parisToday())
             .then(setAssignments)
             .catch(() => {})
         },
@@ -233,6 +321,54 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
             .catch(() => {})
         },
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'household_rhythms', filter },
+        () => {
+          void fetchRhythm(householdId).then(setRhythm).catch(() => {})
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'calendar_periods', filter },
+        () => {
+          void fetchPeriods(householdId).then(setPeriods).catch(() => {})
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'absences', filter },
+        () => {
+          void fetchAbsences(householdId).then(setAbsences).catch(() => {})
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'pings', filter },
+        () => {
+          if (!userId) return
+          void fetchInbox(userId)
+            .then((inbox) => {
+              setPings(inbox.pings)
+              setThanks(inbox.thanks)
+              const latest = inbox.pings[0]
+              if (latest && document.hidden) {
+                showNotice('Kamaji', latest.body)
+              }
+            })
+            .catch(() => {})
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'thanks', filter },
+        () => {
+          if (!userId) return
+          void fetchInbox(userId)
+            .then((inbox) => setThanks(inbox.thanks))
+            .catch(() => {})
+        },
+      )
       .subscribe()
 
     return () => {
@@ -242,9 +378,11 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<HouseholdValue>(() => {
     const currentUser = userId ? (members.find((member) => member.id === userId) ?? null) : null
+    const momentOpen = (item: Assignment) =>
+      !item.slot || openSlotsFor(item.dueOn, rhythm, periods).includes(item.slot)
     const myTasks = userId
       ? assignments
-          .filter((item) => item.status === 'accepted' && item.assigneeId === userId)
+          .filter((item) => item.status === 'accepted' && item.assigneeId === userId && momentOpen(item))
           .sort(compareDue)
       : []
     const proposals = userId
@@ -253,18 +391,25 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
             (item) =>
               item.status === 'open' &&
               item.requestedBy !== userId &&
-              (item.assigneeId === null || item.assigneeId === userId),
+              (item.assigneeId === null || item.assigneeId === userId) &&
+              momentOpen(item),
           )
           .sort(compareDue)
       : []
     const sent = userId
       ? assignments
-          .filter((item) => item.status === 'open' && item.requestedBy === userId)
+          .filter((item) => item.status === 'open' && item.requestedBy === userId && momentOpen(item))
           .sort(compareDue)
       : []
+    const assumedTasks = assignments
+      .filter((item) => item.status === 'done' && item.assumed && momentOpen(item))
+      .sort((a, b) => b.dueOn.localeCompare(a.dueOn))
     const nextMeal =
       meals
-        .filter((meal) => meal.servedOn >= today)
+        .filter(
+          (meal) =>
+            meal.servedOn >= today && openSlotsFor(meal.servedOn, rhythm, periods).includes(meal.slot),
+        )
         .sort(
           (a, b) =>
             a.servedOn.localeCompare(b.servedOn) || slotOrder[a.slot] - slotOrder[b.slot],
@@ -293,6 +438,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
       myTasks,
       proposals,
       sent,
+      assumedTasks,
       meals,
       nextMeal,
       shopping,
@@ -328,14 +474,14 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
           setSheet((current) =>
             current.type === 'detail' && current.assignmentId === id ? { type: 'none' } : current,
           )
-          setAssignments(await fetchAssignments(household.id))
+          setAssignments(await fetchAssignments(household.id, today))
         })
       },
       acceptAssignment: async (id) => {
         if (!household) return
         await run(async () => {
           await acceptAssignmentRpc(id)
-          setAssignments(await fetchAssignments(household.id))
+          setAssignments(await fetchAssignments(household.id, today))
         })
       },
       releaseAssignment: async (id) => {
@@ -343,7 +489,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         await run(async () => {
           await releaseAssignmentRpc(id)
           setSheet({ type: 'none' })
-          setAssignments(await fetchAssignments(household.id))
+          setAssignments(await fetchAssignments(household.id, today))
         })
       },
       createRequest: async (input) => {
@@ -352,7 +498,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         await run(async () => {
           await createRequestRpc(input)
           setSheet({ type: 'none' })
-          setAssignments(await fetchAssignments(household.id))
+          setAssignments(await fetchAssignments(household.id, today))
         })
       },
       setEnergy: async (energy) => {
@@ -404,6 +550,72 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
           setMeals(await fetchMeals(household.id))
         })
       },
+      rhythm,
+      periods,
+      absences,
+      pings,
+      thanks,
+      saveRhythm: async (next) => {
+        if (!household) return
+        await run(async () => {
+          await saveRhythmApi(household.id, next)
+          setRhythm(next)
+        })
+      },
+      addPeriod: async (input) => {
+        if (!household) return
+        await run(async () => {
+          await addPeriodApi(household.id, input)
+          setPeriods(await fetchPeriods(household.id))
+        })
+      },
+      removePeriod: async (id) => {
+        if (!household) return
+        await run(async () => {
+          await removePeriodApi(id)
+          setPeriods(await fetchPeriods(household.id))
+        })
+      },
+      addAbsence: async (input) => {
+        if (!household) return
+        await run(async () => {
+          await addAbsenceApi(household.id, input)
+          setAbsences(await fetchAbsences(household.id))
+        })
+      },
+      removeAbsence: async (id) => {
+        if (!household) return
+        await run(async () => {
+          await removeAbsenceApi(id)
+          setAbsences(await fetchAbsences(household.id))
+        })
+      },
+      markNotDone: async (id) => {
+        if (!household) return
+        await run(async () => {
+          await markNotDoneRpc(id)
+          setSheet({ type: 'none' })
+          setAssignments(await fetchAssignments(household.id, today))
+        })
+      },
+      sendPing: async (toId, body) => {
+        if (!household || !userId || !body.trim()) return
+        await run(async () => {
+          await sendPingApi({ householdId: household.id, fromId: userId, toId, body })
+        })
+      },
+      dismissPing: async (id) => {
+        await run(async () => {
+          setPings((current) => current.filter((item) => item.id !== id))
+          await markPingRead(id)
+        })
+      },
+      sendThanks: async (toId, assignmentId) => {
+        if (!household || !userId || toId === userId) return
+        await run(async () => {
+          await sendThanksApi({ householdId: household.id, fromId: userId, toId, assignmentId })
+        })
+      },
       signOut: async () => {
         await run(async () => {
           await signOutDevice()
@@ -414,13 +626,29 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
           setAssignments([])
           setMeals([])
           setShopping([])
+          setRhythm(null)
+          setPeriods([])
+          setAbsences([])
+          setPings([])
+          setThanks([])
           setStatus('onboarding')
         })
       },
       memberById: (id) => members.find((member) => member.id === id),
       assignmentById: (id) => assignments.find((item) => item.id === id),
     }
-  }, [assignments, error, household, meals, members, refreshAll, sheet, shopping, status, today, userId])
+  }, [absences, assignments, error, household, meals, members, periods, pings, refreshAll, rhythm, sheet, shopping, status, thanks, today, userId])
+
+  useEffect(() => {
+    if (status !== 'ready' || !userId) return
+    const remaining = assignments.filter(
+      (item) =>
+        item.status === 'accepted' &&
+        item.assigneeId === userId &&
+        (!item.slot || openSlotsFor(item.dueOn, rhythm, periods).includes(item.slot)),
+    ).length
+    remindEveningTasks(today, remaining)
+  }, [assignments, periods, rhythm, status, today, userId])
 
   return createElement(HouseholdContext, { value }, children)
 }

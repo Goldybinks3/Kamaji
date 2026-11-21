@@ -7,7 +7,7 @@ import { TaskDetailSheet } from '../tasks/TaskDetailSheet.tsx'
 import { TabBar } from './TabBar.tsx'
 
 export function AppShell() {
-  const { status, error, clearError, sheet } = useHousehold()
+  const { status, error, clearError, sheet, pings, dismissPing, memberById } = useHousehold()
 
   if (status === 'unconfigured') {
     return (
@@ -56,6 +56,24 @@ export function AppShell() {
           >
             <span>{error}</span>
             <button type="button" className="font-bold" onClick={clearError} aria-label="Fermer">
+              ×
+            </button>
+          </div>
+        ) : null}
+        {pings[0] ? (
+          <div className="mb-4 flex items-start justify-between gap-3 rounded-2xl bg-violet-100 px-4 py-3 text-sm">
+            <p>
+              <span className="font-bold">
+                {memberById(pings[0].fromProfileId)?.displayName ?? 'Quelqu’un'} :
+              </span>{' '}
+              {pings[0].body}
+            </p>
+            <button
+              type="button"
+              className="min-h-11 min-w-11 font-bold"
+              aria-label="Marquer le message comme lu"
+              onClick={() => void dismissPing(pings[0].id).catch(() => {})}
+            >
               ×
             </button>
           </div>

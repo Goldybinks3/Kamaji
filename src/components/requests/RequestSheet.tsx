@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { addDays } from '../../lib/dates.ts'
+import { isAbsent, openSlotsFor, slotLabel } from '../../lib/slots.ts'
 import { useHousehold } from '../../hooks/useHousehold.ts'
+import type { MealSlot } from '../../types/domain.ts'
 import { Sheet } from '../ui/Sheet.tsx'
 
 const reasons = [
@@ -26,29 +28,37 @@ const prices = [
 ]
 
 export function RequestSheet({ assigneeId }: { assigneeId: string | null }) {
-  const { others, today, createRequest, closeSheet } = useHousehold()
+  const { others, today, createRequest, closeSheet, rhythm, periods, absences } = useHousehold()
   const [reason, setReason] = useState('')
   const [customTitle, setCustomTitle] = useState('')
   const [who, setWho] = useState(assigneeId ?? 'all')
   const [when, setWhen] = useState('today')
+  const [moment, setMoment] = useState<MealSlot | ''>('dinner')
   const [price, setPrice] = useState('none')
   const [busy, setBusy] = useState(false)
 
   const custom = reason === 'autre'
   const title = custom ? customTitle.trim() : (reasons.find((item) => item.id === reason)?.label ?? '')
-  const canSubmit = !busy && title.length > 0 && who !== ''
+  const offset = whens.find((item) => item.id === when)?.offset ?? 0
+  const dueOn = addDays(today, offset)
+  const slots = openSlotsFor(dueOn, rhythm, periods)
+  const momentValue: MealSlot | '' =
+    moment === '' || slots.includes(moment) ? moment : (slots[0] ?? '')
+  const available = others.filter((member) => !isAbsent(member.id, dueOn, absences))
+  const whoValue = who !== 'all' && available.some((member) => member.id === who) ? who : 'all'
+  const canSubmit = !busy && title.length > 0 && whoValue !== ''
 
   async function submit() {
     if (!canSubmit) return
     setBusy(true)
-    const offset = whens.find((item) => item.id === when)?.offset ?? 0
     const cents = prices.find((item) => item.id === price)?.cents ?? null
     try {
       await createRequest({
         title,
-        assigneeId: who === 'all' ? null : who,
-        dueOn: addDays(today, offset),
+        assigneeId: whoValue === 'all' ? null : whoValue,
+        dueOn,
         priceCents: cents,
+        slot: momentValue === '' ? null : momentValue,
       })
     } catch {
       // L'erreur est affichée dans AppShell
@@ -90,11 +100,11 @@ export function RequestSheet({ assigneeId }: { assigneeId: string | null }) {
           <span className="font-bold">À qui</span>
           <select
             className="min-h-11 rounded-full bg-violet-700 px-4 text-base text-white"
-            value={who}
+            value={whoValue}
             onChange={(event) => setWho(event.target.value)}
           >
             <option value="all">Tout le monde</option>
-            {others.map((member) => (
+            {available.map((member) => (
               <option key={member.id} value={member.id}>
                 {member.displayName}
               </option>
@@ -111,6 +121,21 @@ export function RequestSheet({ assigneeId }: { assigneeId: string | null }) {
             {whens.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid grid-cols-[5.5rem_1fr] items-center gap-3">
+          <span className="font-bold">Moment</span>
+          <select
+            className="min-h-11 rounded-full bg-violet-700 px-4 text-base text-white"
+            value={momentValue}
+            onChange={(event) => setMoment(event.target.value as MealSlot | '')}
+          >
+            <option value="">Sans moment</option>
+            {slots.map((slot) => (
+              <option key={slot} value={slot}>
+                {slotLabel[slot]}
               </option>
             ))}
           </select>

@@ -2,9 +2,8 @@ import { useState, type FormEvent } from 'react'
 import { Sheet } from '../../components/ui/Sheet.tsx'
 import { useHousehold } from '../../hooks/useHousehold.ts'
 import { formatDay, weekDates } from '../../lib/dates.ts'
+import { isAbsent, openSlotsFor, slotLabel } from '../../lib/slots.ts'
 import type { Meal, MealSlot } from '../../types/domain.ts'
-
-const slotLabel: Record<MealSlot, string> = { lunch: 'Déjeuner', dinner: 'Dîner' }
 
 export function MealsPage() {
   const {
@@ -12,6 +11,9 @@ export function MealsPage() {
     shopping,
     members,
     today,
+    rhythm,
+    periods,
+    absences,
     addShopping,
     toggleShopping,
     removeShopping,
@@ -32,6 +34,7 @@ export function MealsPage() {
   const [savingMeal, setSavingMeal] = useState(false)
 
   function openDayEditor(day: string, existing?: Meal) {
+    const open = openSlotsFor(day, rhythm, periods)
     setEditingDay(day)
     if (existing) {
       setSlot(existing.slot)
@@ -39,7 +42,7 @@ export function MealsPage() {
       setCookId(existing.cookId ?? '')
       setEditingMealId(existing.id)
     } else {
-      setSlot('dinner')
+      setSlot(open[0] ?? 'dinner')
       setMealTitle('')
       setCookId('')
       setEditingMealId(null)
@@ -112,11 +115,17 @@ export function MealsPage() {
         <h2 className="mb-2 text-lg font-bold">Menu de la semaine</h2>
         <ul>
           {days.map((day) => {
-            const items = meals.filter((meal) => meal.servedOn === day)
+            const open = openSlotsFor(day, rhythm, periods)
+            const items = meals.filter((meal) => meal.servedOn === day && open.includes(meal.slot))
             return (
               <li key={day} className="border-b border-neutral-200 py-3">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="font-semibold">{formatDay(day)}</p>
+                  <div>
+                    <p className="font-semibold">{formatDay(day)}</p>
+                    <p className="text-sm text-neutral-500">
+                      {open.map((item) => slotLabel[item]).join(' · ')}
+                    </p>
+                  </div>
                   <button
                     type="button"
                     className="min-h-11 rounded-full px-3 text-sm font-bold text-violet-700"
@@ -205,8 +214,8 @@ export function MealsPage() {
       {editingDay ? (
         <Sheet title={formatDay(editingDay)} onClose={() => setEditingDay(null)}>
           <form className="grid gap-4" onSubmit={(event) => void submitMeal(event)}>
-            <div className="grid grid-cols-2 gap-2">
-              {(['lunch', 'dinner'] as MealSlot[]).map((option) => (
+            <div className={`grid gap-2 ${openSlotsFor(editingDay, rhythm, periods).length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+              {openSlotsFor(editingDay, rhythm, periods).map((option) => (
                 <button
                   key={option}
                   type="button"
@@ -240,7 +249,9 @@ export function MealsPage() {
                 onChange={(event) => setCookId(event.target.value)}
               >
                 <option value="">À définir</option>
-                {members.map((member) => (
+                {members
+                  .filter((member) => !isAbsent(member.id, editingDay, absences))
+                  .map((member) => (
                   <option key={member.id} value={member.id}>
                     {member.displayName}
                   </option>

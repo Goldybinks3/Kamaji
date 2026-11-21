@@ -2,7 +2,9 @@ import { useState, type FormEvent } from 'react'
 import { InviteCard } from '../../components/family/InviteCard.tsx'
 import { MemberAvatar } from '../../components/family/MemberAvatar.tsx'
 import { useHousehold } from '../../hooks/useHousehold.ts'
+import { canNotify, requestNotifyPermission } from '../../lib/notify.ts'
 import { avatarKeys, type AvatarKey, type Energy, type Member } from '../../types/domain.ts'
+import { CalendarSettings } from './CalendarSettings.tsx'
 
 const energies: { id: Energy; label: string }[] = [
   { id: 'low', label: 'Basse' },
@@ -101,8 +103,14 @@ function ProfileEditForm({
 }
 
 export function ProfilePage() {
-  const { currentUser, household, setEnergy, updateProfile, signOut } = useHousehold()
+  const { currentUser, household, setEnergy, updateProfile, signOut, thanks, memberById } =
+    useHousehold()
   const [confirmOut, setConfirmOut] = useState(false)
+  const [notifyLabel, setNotifyLabel] = useState(() =>
+    canNotify() && Notification.permission === 'granted'
+      ? 'Notifications activées'
+      : 'Activer les notifications',
+  )
 
   if (!currentUser || !household) return null
 
@@ -146,6 +154,41 @@ export function ProfilePage() {
       </section>
 
       <InviteCard household={household} />
+
+      <CalendarSettings />
+
+      {thanks.length > 0 ? (
+        <section className="grid w-full gap-2">
+          <h2 className="text-lg font-bold">Mercis</h2>
+          {thanks.map((item) => (
+            <p key={item.id} className="rounded-2xl bg-neutral-100 px-4 py-3 text-sm">
+              {memberById(item.fromProfileId)?.displayName ?? 'Quelqu’un'} t’a dit merci
+              {item.note ? ` : ${item.note}` : '.'}
+            </p>
+          ))}
+        </section>
+      ) : null}
+
+      <section className="grid w-full gap-2">
+        <h2 className="text-lg font-bold">Notifications</h2>
+        <p className="text-sm text-neutral-600">
+          Un rappel après 17 h si des tâches restent, et un message quand quelqu’un t’écrit pendant
+          que Kamaji est ouvert. Sur iPhone, ajoute d’abord Kamaji à l’écran d’accueil depuis Safari.
+        </p>
+        <button
+          type="button"
+          className="min-h-11 rounded-full border border-neutral-300 font-bold"
+          onClick={() => {
+            void requestNotifyPermission().then((result) => {
+              setNotifyLabel(
+                result === 'granted' ? 'Notifications activées' : 'Notifications refusées',
+              )
+            })
+          }}
+        >
+          {notifyLabel}
+        </button>
+      </section>
 
       <ProfileEditForm key={formKey} member={currentUser} onSave={updateProfile} />
 
